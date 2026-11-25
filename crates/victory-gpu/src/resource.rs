@@ -1370,17 +1370,13 @@ pub(crate) fn host_made<'a>(
 }
 
 /// Whether more host copies of textures the title fills may be made for
-/// shaders that pick textures by index (`draw.rs` `heap_textures`): always
-/// up to `FLOOR` bytes of them, beyond that while the card's memory in use
-/// by this process is under nine tenths of the budget the system gives it
-/// ([`room_percent`] says another share; `VICTORY_TEXTURE_BUDGET_MB` sets a
-/// limit on those copies' bytes instead). Past the budget the system moves
-/// the card's memory into the PC's, which ended runs 20 and 24.
+/// shaders that pick textures by index (`draw.rs` `heap_textures`): see
+/// [`room_for`]. `VICTORY_TEXTURE_BUDGET_MB` sets a limit on those copies'
+/// bytes instead. Past the budget the system moves the card's memory into
+/// the PC's, which ended runs 20 and 24.
 #[cfg(windows)]
 pub(crate) fn room() -> bool {
     use std::sync::atomic::Ordering::Relaxed;
-    const FLOOR: u64 = 2 << 30;
-    const WITHOUT_BUDGET: u64 = 4 << 30;
     static LIMIT: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
     let limit = *LIMIT.get_or_init(|| {
         let mb = std::env::var("VICTORY_TEXTURE_BUDGET_MB").ok()?;
@@ -1390,13 +1386,29 @@ pub(crate) fn room() -> bool {
     if let Some(limit) = limit {
         return filled < limit;
     }
-    if filled < FLOOR {
+    let memory = crate::host::host().and_then(|h| h.video_memory()).map(|[budget, used, ..]| (budget, used));
+    room_for(filled, memory, room_percent())
+}
+
+/// [`room`] for `filled` bytes of texture copies, the card's `(budget,
+/// used)` and a share `percent` of the budget.
+///
+/// Copies up to a floor are always made while the card is within its
+/// budget, so the first world frames have textures; beyond it, while use is
+/// under `percent` of the budget. The floor is 2 GiB or a quarter of the
+/// budget, whichever is less: a fixed 2 GiB on a card with a 4.8 GB budget,
+/// beside 2.5 GB of render targets, held the card 1 GB over its budget and
+/// the system paged its memory every frame (an RTX 4050 laptop, 6 GB).
+fn room_for(filled: u64, memory: Option<(u64, u64)>, percent: u64) -> bool {
+    const FLOOR: u64 = 2 << 30;
+    const WITHOUT_BUDGET: u64 = 4 << 30;
+    let Some((budget, used)) = memory.filter(|&(budget, _)| budget > 0) else {
+        return filled < WITHOUT_BUDGET;
+    };
+    if filled < FLOOR.min(budget / 4) && used < budget {
         return true;
     }
-    match crate::host::host().and_then(|h| h.video_memory()) {
-        Some([budget, used, ..]) => used < budget / 100 * room_percent(),
-        None => filled < WITHOUT_BUDGET,
-    }
+    used < budget / 100 * percent
 }
 
 /// The share of the card's budget, in percent, up to which host copies of
@@ -4242,5 +4254,25 @@ float4 lit() : SV_Target { return 1.0; }
         // The resource keeps the heap alive.
         assert_eq!(slot::<Release>(heap, 0x10)(heap), 1);
         assert_eq!(slot::<Release>(placed, 0x10)(placed), 0);
+    }
+
+    #[test]
+    fn texture_room_scales_its_floor_with_the_card_budget() {
+        use super::room_for;
+        let gib = 1u64 << 30;
+        // A 24 GB card keeps the full 2 GiB floor.
+        assert!(room_for(gib, Some((24 * gib, 23 * gib)), 90));
+        // A 4.8 GB card's floor is a quarter of its budget.
+        let budget = 4827 << 20;
+        assert!(room_for(gib, Some((budget, budget / 2)), 90));
+        assert!(!room_for(budget / 4, Some((budget, budget * 95 / 100)), 90));
+        // Over the budget nothing more is made, even under the floor.
+        assert!(!room_for(0, Some((budget, budget + 1)), 90));
+        // Past the floor, the share of the budget decides.
+        assert!(room_for(3 * gib, Some((10 * gib, 8 * gib)), 90));
+        assert!(!room_for(3 * gib, Some((10 * gib, 9 * gib + gib / 2)), 90));
+        // No budget known: a fixed limit.
+        assert!(room_for(3 * gib, None, 90));
+        assert!(!room_for(5 * gib, Some((0, 0)), 90));
     }
 }
