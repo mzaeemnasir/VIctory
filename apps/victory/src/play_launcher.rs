@@ -21,7 +21,7 @@ pub(super) fn run(warm: bool) -> anyhow::Result<()> {
     let folder = launcher.parent().context("Launcher folder is missing")?;
     let runtime = folder.join("victory.exe");
     let mut args = std::env::args_os().skip(1).peekable();
-    let (mut warp, mut rt, mut fast) = (false, false, false);
+    let (mut warp, mut rt, mut fast, mut series_s) = (false, false, false, false);
     while let Some(option) = args.peek() {
         if option == "--warp" {
             warp = true;
@@ -29,6 +29,8 @@ pub(super) fn run(warm: bool) -> anyhow::Result<()> {
             rt = true;
         } else if option == "--fast" {
             fast = true;
+        } else if option == "--series-s" {
+            series_s = true;
         } else {
             break;
         }
@@ -44,7 +46,7 @@ pub(super) fn run(warm: bool) -> anyhow::Result<()> {
         }
     };
     if args.next().is_some() {
-        bail!("Usage\n{} [--rt] [--fast] [--warp] [game executable]", launcher.display());
+        bail!("Usage\n{} [--rt] [--fast] [--series-s] [--warp] [game executable]", launcher.display());
     }
     if !game.is_file() || !runtime.is_file() {
         bail!(
@@ -106,6 +108,12 @@ pub(super) fn run(warm: bool) -> anyhow::Result<()> {
         }
         writeln!(log, "Parallel CPU submission preparing requested")?;
     }
+    // The title picks its resolution and memory budgets by the console: as
+    // a Series S it renders smaller frames, for GPUs with less memory.
+    let console = if series_s { "series-s" } else { "series-x" };
+    if series_s {
+        writeln!(log, "Series S console profile requested")?;
+    }
     if warp {
         child.env("VICTORY_D3D12_WARP", "1");
     }
@@ -128,7 +136,7 @@ pub(super) fn run(warm: bool) -> anyhow::Result<()> {
             .args([
                 "--execute",
                 "--console",
-                "series-x",
+                console,
                 "--unimplemented",
                 "trap",
             ])

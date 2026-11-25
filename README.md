@@ -56,6 +56,14 @@ For a local experiment, open **DexNom Runtime (Parallel CPU)** from the Start me
 & "$env:LOCALAPPDATA\DexNom Runtime\victory-play.exe" --fast
 ```
 
+### Testing on GPUs with 8 GB or less
+
+**DexNom Runtime (Series S, low VRAM)** adds `--series-s` to the parallel CPU settings. The game then runs as on an Xbox Series S, which renders smaller frames and uses smaller memory budgets. Upstream testing reached the loading screen in this mode. Gameplay in the world is untested. The texture budget also scales with the memory budget Windows reports for your GPU.
+
+```powershell
+& "$env:LOCALAPPDATA\DexNom Runtime\victory-play.exe" --fast --series-s
+```
+
 ## Credits and licensing
 
 - Marvisak and the VIctory contributors created the original runtime. [Marvisak/VIctory](https://github.com/Marvisak/VIctory)
