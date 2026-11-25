@@ -87,7 +87,6 @@ foreach ($entry in @(
     @{ Name = 'DexNom Runtime'; Arguments = '' }
     @{ Name = 'DexNom Runtime (Experimental RT)'; Arguments = '--rt' }
     @{ Name = 'DexNom Runtime (Parallel CPU)'; Arguments = '--fast' }
-    @{ Name = 'DexNom Runtime (Series S, low VRAM)'; Arguments = '--fast --series-s' }
 )) {
     $shortcut = $shell.CreateShortcut((Join-Path $ShortcutDirectory ($entry.Name + '.lnk')))
     $shortcut.TargetPath = $launcher
