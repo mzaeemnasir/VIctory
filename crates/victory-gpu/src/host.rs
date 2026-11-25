@@ -2479,6 +2479,88 @@ fn late_blocked(runs: &[&HostList]) -> Option<usize> {
     blocked_by(&written, runs, true)
 }
 
+/// Whether a fill of upload memory may go on without waiting for flights
+/// whose shaders may write the title buffer memory it reads, where the
+/// card has never been seen to write those pages (`VICTORY_FILL_GUESS=1`;
+/// off by default, on with the launcher's `--fast`).
+///
+/// The flights' declared writes are the views shaders were given, not what
+/// they store: in the world one joined range covers the title's whole
+/// 182.5 MB GPU heap, and some fifteen fills a frame of about 480 bytes
+/// each (constants the title's CPU wrote) waited 100-145 ms a frame for
+/// the card behind it (an RTX 4050 laptop). The pages the card's writes
+/// land on ([`gpu_landed`]) are kept; a fill that reads only other pages
+/// reads the title's bytes at once. If the card later writes a page such
+/// a fill read, that fill had the title's older bytes (on the console it
+/// would have seen the card's): the page waits from then on, and the
+/// frame line counts it. Texture writes still always wait.
+fn fill_guess() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_FILL_GUESS").is_some_and(|v| v == "1"))
+}
+
+/// The granule of [`GPU_PAGES`].
+const GUESS_PAGE: usize = 4 << 10;
+
+/// Pages of title memory the card's writes to buffers have landed on.
+static GPU_PAGES: Mutex<Option<std::collections::HashSet<usize>>> = Mutex::new(None);
+
+/// Pages fills read without waiting under flights' writes ([`fill_guess`]),
+/// until the card writes them or forever.
+static GUESSED: Mutex<Option<std::collections::HashSet<usize>>> = Mutex::new(None);
+
+/// Since the last frame-rate line: fills that did not wait, and pages of
+/// such fills the card wrote afterwards.
+static GUESS_STATS: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// What shaders wrote, `len` bytes at `address`, went into title memory
+/// (`crate::writeback`): its pages are ones the card writes.
+pub(crate) fn gpu_landed(address: usize, len: usize) {
+    gpu_landed_with(fill_guess(), address, len);
+}
+
+fn gpu_landed_with(guess: bool, address: usize, len: usize) {
+    if !guess || len == 0 {
+        return;
+    }
+    let pages = address / GUESS_PAGE..=(address + len - 1) / GUESS_PAGE;
+    let mut guessed = GUESSED.lock().unwrap_or_else(|e| e.into_inner());
+    let mut landed = GPU_PAGES.lock().unwrap_or_else(|e| e.into_inner());
+    let landed = landed.get_or_insert_with(Default::default);
+    for page in pages {
+        if landed.insert(page) && guessed.as_mut().is_some_and(|g| g.remove(&page)) {
+            GUESS_STATS[1].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+/// Whether a fill reading `[from, to)` must wait for flights writing
+/// `written` ([`fill_guess`]); `count` whether one that does not is counted.
+fn fill_waits(written: &PendingWrites, from: usize, to: usize, count: bool) -> bool {
+    fill_waits_with(fill_guess(), written, from, to, count)
+}
+
+fn fill_waits_with(guess: bool, written: &PendingWrites, from: usize, to: usize, count: bool) -> bool {
+    if !written.touches(from, to) {
+        return false;
+    }
+    if !guess || touches(&written.textures, from, to) {
+        return true;
+    }
+    let pages = from / GUESS_PAGE..=(to - 1) / GUESS_PAGE;
+    {
+        let landed = GPU_PAGES.lock().unwrap_or_else(|e| e.into_inner());
+        if landed.as_ref().is_some_and(|l| pages.clone().any(|p| l.contains(&p))) {
+            return true;
+        }
+    }
+    GUESSED.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).extend(pages);
+    if count {
+        GUESS_STATS[0].fetch_add(1, Ordering::Relaxed);
+    }
+    false
+}
+
 /// [`late_blocked`] against `written`, the title memory flights' shaders
 /// may write (in order, joined); `count` whether the kind of read is
 /// counted for the frame line.
@@ -2504,7 +2586,11 @@ fn blocked_by(written: &PendingWrites, runs: &[&HostList], count: bool) -> Optio
                     }
                 }
                 Step::Fill(_) | Step::Fills(_) => {
-                    if let Some(f) = step.fills().iter().find(|f| written.touches(f.src, f.src.saturating_add(f.len))) {
+                    if let Some(f) = step
+                        .fills()
+                        .iter()
+                        .find(|f| fill_waits(written, f.src, f.src.saturating_add(f.len), count))
+                    {
                         if count {
                             LATE_STATS[16].fetch_add(1, Ordering::Relaxed);
                             #[cfg(feature = "diagnostics")]
@@ -2949,6 +3035,13 @@ fn late_line(frames: f64) {
     }
     #[cfg(feature = "diagnostics")]
     log_read_blocks(frames);
+    if fill_guess() {
+        let [went, wrong] = [0, 1].map(|i| GUESS_STATS[i].swap(0, Ordering::Relaxed));
+        tracing::info!(
+            "fills under flights' buffer writes that did not wait, per frame (VICTORY_FILL_GUESS=1): {:.1}; pages of them the card wrote afterwards: {wrong}",
+            went as f64 / frames
+        );
+    }
     if relay() {
         let r: Vec<f64> = RELAY_STATS.iter().map(|r| r.swap(0, Ordering::Relaxed) as f64 / frames).collect();
         tracing::info!(
@@ -6132,6 +6225,29 @@ mod fill_tests {
         jobs[1].src = jobs[0].dst;
         assert_eq!(run_fills(&jobs, 2), 1);
         assert_eq!(output[1], 167);
+    }
+
+    #[test]
+    fn a_fill_waits_only_for_pages_the_card_has_written() {
+        // Addresses of their own, far from anything else a test lands.
+        let heap = 0x7a5_0000_0000usize;
+        let written = PendingWrites { buffers: vec![(heap, heap + (64 << 20))], textures: Vec::new() };
+        let page = super::GUESS_PAGE;
+        // Without the switch every fill under the range waits.
+        assert!(super::fill_waits_with(false, &written, heap + 16, heap + 496, false));
+        // Outside the range nothing waits.
+        assert!(!super::fill_waits_with(true, &written, heap - 512, heap, false));
+        // Pages the card never wrote: no wait.
+        assert!(!super::fill_waits_with(true, &written, heap + 16, heap + 496, false));
+        // Once the card's writes land on a page, a fill reading it waits,
+        // also one that only begins on the page before.
+        super::gpu_landed_with(true, heap + 3 * page + 8, 4);
+        assert!(super::fill_waits_with(true, &written, heap + 3 * page, heap + 3 * page + 64, false));
+        assert!(super::fill_waits_with(true, &written, heap + 3 * page - 8, heap + 3 * page + 8, false));
+        assert!(!super::fill_waits_with(true, &written, heap + 4 * page, heap + 4 * page + 64, false));
+        // Texture writes always wait.
+        let textures = PendingWrites { buffers: Vec::new(), textures: vec![(heap, heap + page)] };
+        assert!(super::fill_waits_with(true, &textures, heap + 16, heap + 32, false));
     }
 
     #[test]

@@ -10,10 +10,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The switches `--fast` turns on where the user has not set them: host-copy
 /// refreshes, upload fills and list preludes prepared on several CPU threads.
-const FAST_SWITCHES: [(&str, &str); 3] = [
+const FAST_SWITCHES: [(&str, &str); 4] = [
     ("VICTORY_WIDE_REFRESH", "1"),
     ("VICTORY_FILL_WORKERS", "4"),
     ("VICTORY_PARALLEL_PRELUDES", "1"),
+    // Small fills do not wait for shaders that never wrote their pages.
+    ("VICTORY_FILL_GUESS", "1"),
 ];
 
 pub(super) fn run(warm: bool) -> anyhow::Result<()> {
