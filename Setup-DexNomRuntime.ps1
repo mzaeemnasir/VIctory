@@ -86,6 +86,7 @@ $shell = New-Object -ComObject WScript.Shell
 foreach ($entry in @(
     @{ Name = 'DexNom Runtime'; Arguments = '' }
     @{ Name = 'DexNom Runtime (Experimental RT)'; Arguments = '--rt' }
+    @{ Name = 'DexNom Runtime (Parallel CPU)'; Arguments = '--fast' }
 )) {
     $shortcut = $shell.CreateShortcut((Join-Path $ShortcutDirectory ($entry.Name + '.lnk')))
     $shortcut.TargetPath = $launcher
@@ -93,4 +94,4 @@ foreach ($entry in @(
     $shortcut.WorkingDirectory = $InstallDir
     $shortcut.Save()
 }
-Write-Host "Open DexNom Runtime from $ShortcutDirectory to play, or select DexNom Runtime (Experimental RT) to try ray tracing."
+Write-Host "Open DexNom Runtime from $ShortcutDirectory to play, DexNom Runtime (Parallel CPU) to prepare frames on several CPU threads, or DexNom Runtime (Experimental RT) to try ray tracing."

@@ -8,17 +8,27 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// The switches `--fast` turns on where the user has not set them: host-copy
+/// refreshes, upload fills and list preludes prepared on several CPU threads.
+const FAST_SWITCHES: [(&str, &str); 3] = [
+    ("VICTORY_WIDE_REFRESH", "1"),
+    ("VICTORY_FILL_WORKERS", "4"),
+    ("VICTORY_PARALLEL_PRELUDES", "1"),
+];
+
 pub(super) fn run(warm: bool) -> anyhow::Result<()> {
     let launcher = std::env::current_exe()?;
     let folder = launcher.parent().context("Launcher folder is missing")?;
     let runtime = folder.join("victory.exe");
     let mut args = std::env::args_os().skip(1).peekable();
-    let (mut warp, mut rt) = (false, false);
+    let (mut warp, mut rt, mut fast) = (false, false, false);
     while let Some(option) = args.peek() {
         if option == "--warp" {
             warp = true;
         } else if option == "--rt" {
             rt = true;
+        } else if option == "--fast" {
+            fast = true;
         } else {
             break;
         }
@@ -34,7 +44,7 @@ pub(super) fn run(warm: bool) -> anyhow::Result<()> {
         }
     };
     if args.next().is_some() {
-        bail!("Usage\n{} [--rt] [--warp] [game executable]", launcher.display());
+        bail!("Usage\n{} [--rt] [--fast] [--warp] [game executable]", launcher.display());
     }
     if !game.is_file() || !runtime.is_file() {
         bail!(
@@ -87,6 +97,14 @@ pub(super) fn run(warm: bool) -> anyhow::Result<()> {
             .env("VICTORY_ACTIVATE_RAYS", "1")
             .env("VICTORY_RT_RESOLVE", "1");
         writeln!(log, "Experimental ray tracing requested")?;
+    }
+    if fast {
+        for (name, value) in FAST_SWITCHES {
+            if std::env::var_os(name).is_none() {
+                child.env(name, value);
+            }
+        }
+        writeln!(log, "Parallel CPU submission preparing requested")?;
     }
     if warp {
         child.env("VICTORY_D3D12_WARP", "1");

@@ -50,12 +50,10 @@ The source ZIP builds with the Windows setup script. The test report covers shad
 
 ### Testing CPU submission workers
 
-For a local experiment, open PowerShell and run the following after setup. The process uses four CPU workers for eligible upload batches and can record independent transition command lists on the shared worker pool. The final GPU queue, fence signals and resource transitions retain the game's submission order. Compare the same save and camera after the initial streaming period. The default launcher uses the baseline settings.
+For a local experiment, open **DexNom Runtime (Parallel CPU)** from the Start menu after setup, or pass `--fast` to `victory-play.exe`. The process refreshes host copies of guest memory on several threads, uses four CPU workers for eligible upload batches and can record independent transition command lists on the shared worker pool. The final GPU queue, fence signals and resource transitions retain the game's submission order. Compare the same save and camera after the initial streaming period. The default launcher uses the baseline settings, and any of these variables you set yourself takes precedence.
 
 ```powershell
-$env:VICTORY_FILL_WORKERS = '4'
-$env:VICTORY_PARALLEL_PRELUDES = '1'
-& "$env:LOCALAPPDATA\DexNom Runtime\victory-play.exe"
+& "$env:LOCALAPPDATA\DexNom Runtime\victory-play.exe" --fast
 ```
 
 ## Credits and licensing
