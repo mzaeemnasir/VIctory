@@ -140,6 +140,20 @@ impl Host {
         software(&self.device)
     }
 
+    /// The widest wave the device runs (`WaveLaneCountMax`), as the runtime
+    /// tells the translator ([`super::set_host_max_wave`]); `None` if the
+    /// device does not say.
+    pub fn max_wave_lanes(&self) -> Option<u32> {
+        let mut o1 = D3D12_FEATURE_DATA_D3D12_OPTIONS1::default();
+        // SAFETY: a plain feature query into a structure of the right size.
+        unsafe {
+            self.device
+                .CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS1, (&raw mut o1).cast(), size_of_val(&o1) as u32)
+                .ok()?;
+        }
+        (o1.WaveLaneCountMax > 0).then_some(o1.WaveLaneCountMax)
+    }
+
     /// The root signature translated shaders expect: user data per stage
     /// at `b0`, immediate samplers per stage at `s<n>`, heaps directly
     /// indexed.

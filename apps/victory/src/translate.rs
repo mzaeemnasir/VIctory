@@ -175,7 +175,16 @@ pub fn run(
         );
     }
     if pipelines {
-        Host::new(false).map_err(anyhow::Error::msg)?;
+        let host = Host::new(false).map_err(anyhow::Error::msg)?;
+        // Pipelines are made on this device: translate for its waves, as a
+        // run on it does (else an NVIDIA card is asked for 64-lane waves the
+        // runtime would have split), unless a wave size was given.
+        if victory_shader::emit::host_max_wave() == 0
+            && let Some(lanes) = host.max_wave_lanes()
+        {
+            victory_shader::emit::set_host_max_wave(lanes);
+            println!("host waves   at most {lanes} lanes");
+        }
     }
     let pairs: Vec<(String, String)> = std::env::var("VICTORY_PAIRS")
         .unwrap_or_default()
