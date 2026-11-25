@@ -2341,11 +2341,55 @@ static LATE_WAITED: [std::sync::atomic::AtomicU64; 11] = [const { std::sync::ato
 
 /// Whether `[from, to)` touches one of `ranges` (in order, joined).
 pub(crate) fn touches(ranges: &[(usize, usize)], from: usize, to: usize) -> bool {
+    touching(ranges, from, to).is_some()
+}
+
+/// The first of `ranges` (in order, joined) that `[from, to)` touches.
+fn touching(ranges: &[(usize, usize)], from: usize, to: usize) -> Option<(usize, usize)> {
     if from >= to {
-        return false;
+        return None;
     }
     let at = ranges.partition_point(|r| r.1 <= from);
-    ranges.get(at).is_some_and(|r| r.0 < to)
+    ranges.get(at).copied().filter(|r| r.0 < to)
+}
+
+/// For the frame-rate line: per range flights' shaders may write (start,
+/// end), the settles a read of title memory there made (buffer copies and
+/// fills of upload memory), and the bytes those reads asked for. A settle
+/// for a read waits for the card; a written range far larger than what is
+/// read says the shaders' declared writes are coarser than what they do.
+#[cfg(feature = "diagnostics")]
+static READ_BLOCKS: Mutex<Option<std::collections::HashMap<(usize, usize), (u64, u64)>>> = Mutex::new(None);
+
+/// A read of `[from, to)` was blocked by a flight's write range.
+#[cfg(feature = "diagnostics")]
+fn read_blocked(written: &PendingWrites, from: usize, to: usize) {
+    let Some(range) = touching(&written.buffers, from, to).or_else(|| touching(&written.textures, from, to)) else {
+        return;
+    };
+    let mut map = READ_BLOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    let e = map.get_or_insert_with(Default::default).entry(range).or_insert((0, 0));
+    e.0 += 1;
+    e.1 += (to - from) as u64;
+}
+
+/// Logs the busiest of [`READ_BLOCKS`] and empties it.
+#[cfg(feature = "diagnostics")]
+fn log_read_blocks(frames: f64) {
+    let Some(map) = READ_BLOCKS.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+        return;
+    };
+    let mut ranges: Vec<_> = map.into_iter().collect();
+    ranges.sort_by_key(|&(_, (n, _))| std::cmp::Reverse(n));
+    for ((from, to), (n, bytes)) in ranges.into_iter().take(5) {
+        tracing::info!(
+            "  title memory read under flights' writes: written range {from:#x}+{:#x} ({:.1} MB), {:.1} reads/frame of {:.3} MB/frame",
+            to - from,
+            (to - from) as f64 / 1e6,
+            n as f64 / frames,
+            bytes as f64 / 1e6 / frames
+        );
+    }
 }
 
 /// `ranges` with `more`, in order, joined where they overlap or touch.
@@ -2449,15 +2493,24 @@ fn blocked_by(written: &PendingWrites, runs: &[&HostList], count: bool) -> Optio
                     if written.touches(src, src + len) || written.touches(dst, dst + len) {
                         if count {
                             LATE_STATS[15].fetch_add(1, Ordering::Relaxed);
+                            #[cfg(feature = "diagnostics")]
+                            if written.touches(src, src + len) {
+                                read_blocked(written, src, src + len);
+                            } else {
+                                read_blocked(written, dst, dst + len);
+                            }
                         }
                         return Some(WHY_READ);
                     }
                 }
                 Step::Fill(_) | Step::Fills(_) => {
-                    if step.fills().iter().any(|f| written.touches(f.src, f.src.saturating_add(f.len))) {
+                    if let Some(f) = step.fills().iter().find(|f| written.touches(f.src, f.src.saturating_add(f.len))) {
                         if count {
                             LATE_STATS[16].fetch_add(1, Ordering::Relaxed);
+                            #[cfg(feature = "diagnostics")]
+                            read_blocked(written, f.src, f.src.saturating_add(f.len));
                         }
+                        let _ = f;
                         return Some(WHY_READ);
                     }
                 }
@@ -2894,6 +2947,8 @@ fn late_line(frames: f64) {
             w[WHY_FENCE],
         );
     }
+    #[cfg(feature = "diagnostics")]
+    log_read_blocks(frames);
     if relay() {
         let r: Vec<f64> = RELAY_STATS.iter().map(|r| r.swap(0, Ordering::Relaxed) as f64 / frames).collect();
         tracing::info!(
