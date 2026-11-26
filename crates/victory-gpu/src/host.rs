@@ -2479,8 +2479,9 @@ fn late_blocked(runs: &[&HostList]) -> Option<usize> {
     blocked_by(&written, runs, true)
 }
 
-/// Whether a fill of upload memory may go on without waiting for flights
-/// whose shaders may write the title buffer memory it reads, where the
+/// Whether a fill of upload memory (or a title buffer copy, at either end)
+/// may go on without waiting for flights whose shaders may write the title
+/// buffer memory it touches, where the
 /// card has never been seen to write those pages (`VICTORY_FILL_GUESS=1`;
 /// off by default, on with the launcher's `--fast`).
 ///
@@ -2572,7 +2573,12 @@ fn blocked_by(written: &PendingWrites, runs: &[&HostList], count: bool) -> Optio
         for step in &list.deferred().copies {
             match step {
                 &Step::Copy(dst, src, len) => {
-                    if written.touches(src, src + len) || written.touches(dst, dst + len) {
+                    // Both ends, as a fill's source ([`fill_waits`]): the
+                    // copy back of what shaders wrote puts in only the
+                    // bytes they changed, so a destination on pages the
+                    // card never wrote keeps what this copy put there.
+                    let src_waits = fill_waits(written, src, src + len, count);
+                    if src_waits || fill_waits(written, dst, dst + len, count) {
                         if count {
                             LATE_STATS[15].fetch_add(1, Ordering::Relaxed);
                             #[cfg(feature = "diagnostics")]
@@ -3038,7 +3044,7 @@ fn late_line(frames: f64) {
     if fill_guess() {
         let [went, wrong] = [0, 1].map(|i| GUESS_STATS[i].swap(0, Ordering::Relaxed));
         tracing::info!(
-            "fills under flights' buffer writes that did not wait, per frame (VICTORY_FILL_GUESS=1): {:.1}; pages of them the card wrote afterwards: {wrong}",
+            "fills and buffer copies under flights' buffer writes that did not wait, per frame (VICTORY_FILL_GUESS=1): {:.1}; pages of them the card wrote afterwards: {wrong}",
             went as f64 / frames
         );
     }
