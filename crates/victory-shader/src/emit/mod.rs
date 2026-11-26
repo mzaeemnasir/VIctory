@@ -92,6 +92,7 @@ mod helper_lane_tests;
 mod intersect_tests;
 #[cfg(all(windows, any(test, feature = "host")))]
 pub mod host;
+mod lds_meet;
 mod lower;
 mod own_bits;
 mod rect;

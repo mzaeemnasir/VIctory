@@ -61,6 +61,7 @@ translation_inputs! {
     "emit/container.rs",
     "emit/guest_address.rs",
     "emit/intersect.rs",
+    "emit/lds_meet.rs",
     "emit/lower.rs",
     "emit/mod.rs",
     "emit/own_bits.rs",
