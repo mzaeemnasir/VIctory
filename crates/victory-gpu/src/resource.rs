@@ -496,6 +496,7 @@ fn twin_texture(
     crate::host::name(&texture, || {
         format!("depth twin {}x{} f{}", d.width, d.height, d.format)
     });
+    crate::host::keep_resident(&host.device, &texture);
     // The buffer a stencil plane and its twin are copied through: as big
     // as the plane's mips and slices laid out for a copy (they follow the
     // depth plane's in the texture's subresources).
@@ -1965,6 +1966,9 @@ fn host_texture(
         crate::host::name(t, || {
             format!("texture {}x{} f{} flags {:#x}", d.width, d.height, d.format, d.flags)
         });
+        if d.flags & (TARGET | DEPTH | UNORDERED) != 0 {
+            crate::host::keep_resident(&host.device, t);
+        }
     }
     texture
 }

@@ -1432,6 +1432,33 @@ pub(crate) fn name(object: &impl Interface, text: impl FnOnce() -> String) {
     }
 }
 
+/// Asks the system to keep `object` in the card's memory before ordinary
+/// resources once the card is past its budget: render targets, depth and
+/// shader-written textures and the card's buffers are read and written
+/// every frame, while most textures the title fills are sampled now and
+/// then. Past the budget (an RTX 4050 laptop: 6.8 GB in use of 5.0) the
+/// system moves some of the card's memory to the PC's, and a target there
+/// is crossed over the bus by every draw. A hint only: nothing changes
+/// while the card has room. `VICTORY_RESIDENCY_PRIORITY=0` gives none.
+pub(crate) fn keep_resident(device: &ID3D12Device, object: &ID3D12Resource) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("VICTORY_RESIDENCY_PRIORITY").is_none_or(|v| v != "0")) {
+        return;
+    }
+    let (Ok(device), Ok(pageable)) = (device.cast::<ID3D12Device1>(), object.cast::<ID3D12Pageable>()) else {
+        return;
+    };
+    let objects = [Some(pageable)];
+    let priorities = [D3D12_RESIDENCY_PRIORITY_HIGH];
+    // SAFETY: one live object and one priority, both arrays ours.
+    if unsafe { device.SetResidencyPriority(1, objects.as_ptr(), priorities.as_ptr()) }.is_ok() {
+        RESIDENT.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Resources given a high residency priority ([`keep_resident`]).
+pub(crate) static RESIDENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// One in [`ALIVE`]`[0]` while it lives (a host list), and one in
 /// [`LISTS`]`[3]` until it is first reset.
 struct Counted {
@@ -7455,7 +7482,7 @@ impl Host {
             return;
         };
         tracing::info!(
-            "video memory as the system counts it, {}: the card's own: budget {} MB, in use {} MB, {} MB could still be reserved, {} MB reserved; the PC's shared with the card: budget {} MB, in use {} MB, {} MB could still be reserved, {} MB reserved (the layer reserves none)",
+            "video memory as the system counts it, {}: the card's own: budget {} MB, in use {} MB, {} MB could still be reserved, {} MB reserved; the PC's shared with the card: budget {} MB, in use {} MB, {} MB could still be reserved, {} MB reserved (the layer reserves none); {} resources kept resident first",
             when,
             own[0] >> 20,
             own[1] >> 20,
@@ -7464,7 +7491,8 @@ impl Host {
             shared[0] >> 20,
             shared[1] >> 20,
             shared[2] >> 20,
-            shared[3] >> 20
+            shared[3] >> 20,
+            RESIDENT.load(Ordering::Relaxed)
         );
     }
 
@@ -7558,7 +7586,12 @@ impl Host {
             )
         };
         match made {
-            Ok(()) => buffer,
+            Ok(()) => {
+                if let Some(b) = &buffer {
+                    keep_resident(&self.device, b);
+                }
+                buffer
+            }
             Err(e) => {
                 tracing::warn!(error = %e, size, "no unordered-access buffer");
                 None
