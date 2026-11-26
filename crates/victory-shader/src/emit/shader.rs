@@ -534,9 +534,16 @@ impl Shader {
                 if unused.kind != 0 || unused.usage != 0 || unused.row.is_none() {
                     continue;
                 }
+                // Read elements, and those whose mode is fixed whether read
+                // or not (system values and integers are constant).
                 let mut modes = self.inputs.iter()
-                    .filter(|e| e.row == unused.row && e.usage != 0)
-                    .map(|e| e.interp);
+                    .enumerate()
+                    .filter(|&(other, e)| {
+                        other != index
+                            && e.row == unused.row
+                            && (e.usage != 0 || e.kind != 0 || e.comp != 9)
+                    })
+                    .map(|(_, e)| e.interp);
                 if let Some(mode) = modes.next()
                     && (mode == 1 || unused.comp == 9)
                     && modes.all(|other| other == mode)

@@ -659,7 +659,7 @@ fn emit_program(
             _ => 0,
         };
     }
-    if native.stage == HwStage::Vs
+    if matches!(native.stage, HwStage::Vs | HwStage::Ms)
         && let Some(psv) = c.part(FourCC::PSV0)
     {
         vertex_output_interpolation(psv.data, &mut outputs)?;
@@ -764,7 +764,9 @@ fn vertex_output_interpolation(
     let info = take(&mut data, info_size)?;
     // PSVRuntimeInfo0 has no signature. PSVRuntimeInfo1 and later share
     // these stage and signature count fields.
-    if info.len() < 36 || info[24] != 1 || info[29] == 0 {
+    // Vertex (1) and mesh (13) programs list their vertex outputs after the
+    // inputs; a mesh program's primitive outputs follow and keep their mode.
+    if info.len() < 36 || !matches!(info[24], 1 | 13) || info[29] == 0 {
         return Ok(());
     }
     let resources = size(&mut data)?;

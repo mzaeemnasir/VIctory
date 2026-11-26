@@ -452,6 +452,31 @@ mod tests {
         assert_eq!(recovered.iter().map(|e| e.interp).collect::<Vec<_>>(), [1, 1, 2]);
         assert!(super::super::vertex_output_interpolation(&psv[..psv.len() - 1], &mut recovered)
             .is_err());
+        // Mesh programs (PSV stage 13) declare the same per-vertex modes.
+        let mesh = super::super::shader::Mesh {
+            max_vertices: 64,
+            max_primitives: 64,
+            topology: 2,
+        };
+        let mesh_psv = super::psv(&Psv {
+            stage: 13,
+            mesh: Some((mesh, 0)),
+            ..Psv {
+                stage: 1,
+                flag: false,
+                inputs: &[],
+                outputs: &outputs,
+                prims: &[],
+                mesh: None,
+                geometry: None,
+                bindings: &[],
+                threads: [64, 1, 1],
+                wave_size: None,
+            }
+        });
+        recovered[1].interp = 2;
+        super::super::vertex_output_interpolation(&mesh_psv, &mut recovered).unwrap();
+        assert_eq!(recovered.iter().map(|e| e.interp).collect::<Vec<_>>(), [1, 1, 2]);
     }
 
     #[test]
