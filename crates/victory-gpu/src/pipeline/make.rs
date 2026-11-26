@@ -190,6 +190,24 @@ fn wait_budget() -> Duration {
     })
 }
 
+/// `VICTORY_PIPELINE_WAIT_GRAPHICS_MS`: what a frame waits for graphics
+/// pipelines being made, all threads together, in place of [`wait_budget`]
+/// and the loading allowance; unset, those decide (off by default, 50 ms
+/// with the launcher's `--fast`). Compute pipelines keep theirs: a pass the
+/// title dispatches once is lost for the session if it is dropped. A
+/// dropped draw only misses its frames until its pipeline is made: a scene
+/// new to the caches took 22-25 s a frame waiting for pipelines (an RTX
+/// 4050 laptop, recording threads together), and the window stopped
+/// answering.
+fn graphics_wait_budget() -> Option<Duration> {
+    static BUDGET: OnceLock<Option<Duration>> = OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        let millis = std::env::var("VICTORY_PIPELINE_WAIT_GRAPHICS_MS").ok()?.trim().parse::<u64>().ok()?;
+        tracing::info!(millis, "graphics pipeline wait budget per frame (VICTORY_PIPELINE_WAIT_GRAPHICS_MS)");
+        Some(Duration::from_millis(millis))
+    })
+}
+
 /// The default of [`wait_budget`]: the picture before frame rate. A frame
 /// waits for pipelines still being made rather than drop their draws and
 /// dispatches, up to 12 s for each kind (graphics, compute), the threads
@@ -427,7 +445,13 @@ fn wait(p: &Pending, frame: u64) {
     static PAST: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
     let compute = p.computes();
     let past = &PAST[usize::from(compute)];
-    let budget = frame_budget(base, compute, loading_allowance(), Duration::from_millis(past.load(Ordering::Relaxed)));
+    let budget = match graphics_wait_budget() {
+        Some(graphics) if !compute => graphics,
+        _ => frame_budget(base, compute, loading_allowance(), Duration::from_millis(past.load(Ordering::Relaxed))),
+    };
+    if budget.is_zero() {
+        return;
+    }
     // The frame the budget belongs to, and what was waited of it (or is
     // taken by a thread waiting now), by kind.
     static FRAMES: [Mutex<FrameWait>; 2] = [const { Mutex::new(FrameWait::new()) }; 2];
